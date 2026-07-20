@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 
-from angle2 import extract_clip_metrics
+from pose_extractor import extract_clip_metrics
 
 # -----------------------------
 # Paths
