@@ -1,60 +1,56 @@
+import 'dart:io';
 import 'dart:async';
 
 import 'package:camera/camera.dart';
-import 'package:campire/core/constants.dart';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
 import 'package:campire/camera/camera_controller_service.dart';
 import 'package:campire/camera/recording_manager.dart';
-import 'package:campire/core/logger.dart';
 import 'package:campire/models/device_info.dart';
 import 'package:campire/models/sync_message.dart';
 import 'package:campire/network/clock_sync_service.dart';
-import 'package:campire/network/command_channel.dart';
 import 'package:campire/network/discovery_service.dart';
-import 'package:campire/state/app_role_provider.dart';
-import 'package:campire/state/session_state_provider.dart';
-import 'package:campire/ui/remote/remote_status_indicator.dart';
-import 'package:campire/models/recording_session.dart';
-import 'package:campire/utils/wakelock_helper.dart';
+import 'package:campire/network/node_client_service.dart';
 
-/// Screen representing the Remote camera device UI.
-///
-/// Shows a live camera preview and a status overlay. This device is fully
-/// controller-driven — no manual camera controls.
+import 'package:campire/ui/remote/widgets/floating_header_hud.dart';
+import 'package:campire/ui/remote/widgets/floating_connection_bar.dart';
+import 'package:campire/ui/remote/widgets/recording_status_indicator.dart';
+import 'package:campire/ui/remote/widgets/camera_grid_overlay.dart';
+import 'package:campire/ui/remote/widgets/remote_shutter_ring.dart';
+
 class RemoteHomeScreen extends StatefulWidget {
-  const RemoteHomeScreen({super.key});
+  final String deviceName;
+
+  const RemoteHomeScreen({super.key, required this.deviceName});
 
   @override
   State<RemoteHomeScreen> createState() => _RemoteHomeScreenState();
 }
 
 class _RemoteHomeScreenState extends State<RemoteHomeScreen> {
-  // ── Services ──────────────────────────────────────────────────────────
   late final String _localDeviceId;
   CameraControllerService? _cameraService;
   ClockSyncService? _clockSyncService;
   DiscoveryService? _discoveryService;
   RecordingManager? _recordingManager;
-  CommandServer? _commandServer;
-  CommandChannel? _controllerChannel;
-
-  StreamSubscription<CommandChannel>? _serverSub;
-  StreamSubscription<SyncMessage>? _messageSub;
+  NodeClientService? _nodeClientService;
 
   bool _cameraReady = false;
-  bool _isExposureLocked = false;
-  bool _isReinitializing = false;
-  ResolutionPreset _selectedResolution = AppConstants.targetResolutionPreset;
-  int _selectedFps = AppConstants.targetFps;
-  String? _connectionLabel;
+  
+  bool _isConnected = false;
+  String _hostIp = '';
+  final TextEditingController _ipController = TextEditingController();
+
+  // Recording State
+  bool _isRecording = false;
+  DateTime? _recordingStartTime;
+  Duration _recordingDuration = Duration.zero;
+  Timer? _uiTimer;
 
   @override
   void initState() {
     super.initState();
     _localDeviceId = 'remote_${DateTime.now().millisecondsSinceEpoch}';
-
     _cameraService = CameraControllerService(localDeviceId: _localDeviceId);
     _clockSyncService = ClockSyncService(localDeviceId: _localDeviceId);
     _recordingManager = RecordingManager(
@@ -62,433 +58,181 @@ class _RemoteHomeScreenState extends State<RemoteHomeScreen> {
       localDeviceId: _localDeviceId,
     );
 
-    WakelockHelper.enable();
-    _initServices();
+    _initCamera();
+    _startDiscovery();
+    
+    // Poll for recording state to update UI overlays
+    _uiTimer = Timer.periodic(const Duration(milliseconds: 200), _checkRecordingState);
   }
 
-  Future<void> _initServices() async {
-    // Pre-warm camera.
+  void _checkRecordingState(Timer t) {
+    if (!mounted) return;
+    final recordingNow = _cameraService?.isRecording ?? false;
+    
+    if (recordingNow && !_isRecording) {
+      setState(() {
+        _isRecording = true;
+        _recordingStartTime = DateTime.now();
+        _recordingDuration = Duration.zero;
+      });
+    } else if (!recordingNow && _isRecording) {
+      setState(() {
+        _isRecording = false;
+        _recordingStartTime = null;
+      });
+    } else if (recordingNow && _recordingStartTime != null) {
+      setState(() {
+        _recordingDuration = DateTime.now().difference(_recordingStartTime!);
+      });
+    }
+  }
+
+  Future<void> _initCamera() async {
     final ok = await _cameraService!.initialize();
     if (mounted) {
       setState(() => _cameraReady = ok);
     }
+  }
 
-    // Start listening for discovery broadcasts.
+  void _startDiscovery() async {
     _discoveryService = DiscoveryService(
       localDeviceId: _localDeviceId,
       localDisplayName: 'Remote Camera',
       localRole: DeviceRole.remote,
     );
     await _discoveryService!.start();
-
-    // Start clock sync responder.
-    await _clockSyncService!.startResponder();
-
-    // Start command server — accept TCP connection from controller.
-    _commandServer = CommandServer();
-    await _commandServer!.start();
-
-    _serverSub = _commandServer!.connections.listen(_onControllerConnected);
-
-    if (mounted) {
-      setState(() => _connectionLabel = 'Waiting for controller...');
-    }
   }
 
-  void _onControllerConnected(CommandChannel channel) {
-    SyncLogger.info('Remote: controller connected');
-
-    _controllerChannel = channel;
-    _messageSub?.cancel();
-    _messageSub = channel.messages.listen(_onControllerMessage);
-
-    channel.onDisconnected = () {
-      SyncLogger.info('Remote: controller disconnected');
-      if (mounted) {
-        setState(() => _connectionLabel = 'Controller disconnected');
-        context.read<SessionStateProvider>().resetSession();
-      }
-    };
-
-    if (mounted) {
-      setState(() => _connectionLabel = 'Connected to controller');
-    }
-  }
-
-  void _onControllerMessage(SyncMessage message) {
-    if (!mounted) return;
-    final session = context.read<SessionStateProvider>();
-
-    switch (message.type) {
-      case SyncMessageType.startAt:
-      case SyncMessageType.startNow:
-        if (session.status == SessionStatus.recording) {
-          SyncLogger.info('Remote: already recording, ignoring ${message.type.wireValue}');
-          return;
+  void _connectToHost(String ip) {
+    if (ip.isEmpty) return;
+    
+    _nodeClientService?.disconnect();
+    _nodeClientService = NodeClientService(
+      localDeviceId: _localDeviceId,
+      deviceName: widget.deviceName,
+      hostIp: ip,
+      onMessageReceived: _handleMessage,
+      onConnected: () {
+        if (mounted) {
+          setState(() {
+            _isConnected = true;
+            _hostIp = ip;
+          });
         }
-
-        SyncLogger.sync('Remote: received ${message.type.wireValue}');
-        session.startSession(
-          _buildSession(message),
-        );
-
-        if (message.type == SyncMessageType.startAt) {
-          _recordingManager!.handleStartAt(
-            message: message,
-            clockSyncService: _clockSyncService!,
-            controllerChannel: _controllerChannel!,
-          );
-          // The recording manager schedules the timer. When it fires,
-          // recording starts. We optimistically set to recording after
-          // the scheduled delay.
-          final targetMicros = message.payload['targetStartMicros'] as int;
-          final offset =
-              _clockSyncService!.offsets[message.senderDeviceId] ?? 0;
-          final localTargetMicros = targetMicros + offset;
-          final nowMicros = DateTime.now().microsecondsSinceEpoch;
-          final delayMicros = localTargetMicros - nowMicros;
-
-          Future<void>.delayed(
-            Duration(microseconds: delayMicros > 0 ? delayMicros : 0),
-            () {
-              if (mounted) {
-                session.setRecording();
-                _sendStatusUpdate(true);
-              }
-            },
-          );
-        } else {
-          // startNow
-          _startLocalRecording();
+      },
+      onDisconnected: () {
+        if (mounted) {
+          setState(() {
+            _isConnected = false;
+            _hostIp = '';
+          });
         }
-        break;
-
-      case SyncMessageType.stop:
-        SyncLogger.sync('Remote: received stop');
-        _recordingManager!.handleStop();
-        session.resetSession();
-        _sendStatusUpdate(false);
-        break;
-
-      default:
-        // Ignore messages not relevant to this role.
-        break;
-    }
-  }
-
-  RecordingSession _buildSession(SyncMessage msg) {
-    return RecordingSession(
-      sessionId: 'remote_session_${DateTime.now().millisecondsSinceEpoch}',
-      scheduledStartMicros: msg.payload['targetStartMicros'] as int? ?? 0,
-      participatingDeviceIds: [msg.senderDeviceId],
+      },
     );
+    _nodeClientService!.connect();
   }
 
-  Future<void> _startLocalRecording() async {
+  void _handleMessage(SyncMessage message) async {
     if (!mounted) return;
-    final session = context.read<SessionStateProvider>();
-    if (session.status == SessionStatus.recording) return;
 
-    if (session.status != SessionStatus.awaitingSync) {
-      session.startSession(RecordingSession(
-        sessionId: 'local_${DateTime.now().millisecondsSinceEpoch}',
-        scheduledStartMicros: DateTime.now().microsecondsSinceEpoch,
-        participatingDeviceIds: [_localDeviceId],
-      ));
-    }
-    
-    await _cameraService?.startRecording();
-    if (mounted) session.setRecording();
-    _sendStatusUpdate(true);
-  }
-
-  Future<void> _stopLocalRecording() async {
-    if (!mounted) return;
-    final session = context.read<SessionStateProvider>();
-    
-    _recordingManager?.cancelScheduledStart();
-    await _cameraService?.stopRecording();
-    if (mounted) session.resetSession();
-    _sendStatusUpdate(false);
-  }
-
-  void _sendStatusUpdate(bool isRecording) {
-    if (_controllerChannel != null && _controllerChannel!.isConnected) {
-      final msg = SyncMessage(
-        type: SyncMessageType.statusUpdate,
-        senderDeviceId: _localDeviceId,
-        timestampMicros: DateTime.now().microsecondsSinceEpoch,
-        payload: {'isRecording': isRecording},
-      );
-      _controllerChannel!.send(msg);
-    }
-  }
-
-  // ── Exposure toggle ──────────────────────────────────────────────────
-
-  Future<void> _onSettingsChanged(ResolutionPreset? res, int? fps) async {
-    if (res == null && fps == null) return;
-    
-    final newRes = res ?? _selectedResolution;
-    final newFps = fps ?? _selectedFps;
-
-    setState(() {
-      _selectedResolution = newRes;
-      _selectedFps = newFps;
-      _isReinitializing = true;
-    });
-
-    await _cameraService?.reinitialize(newRes, newFps);
-
-    if (mounted) {
-      setState(() => _isReinitializing = false);
-    }
-  }
-
-  Future<void> _toggleExposureLock() async {
-    final service = _cameraService;
-    if (service == null) return;
-
-    if (_isExposureLocked) {
-      await service.unlockExposure();
-    } else {
-      await service.lockExposure();
-    }
-
-    if (mounted) {
-      setState(() => _isExposureLocked = service.isExposureLocked);
+    if (message.type == SyncMessageType.clockSyncRequest) {
+       final response = _clockSyncService?.handleRequest(message);
+       if (response != null) _nodeClientService?.send(response);
+    } else if (message.type == SyncMessageType.startAt) {
+       _recordingManager?.handleStartAt(
+          message: message,
+          clockSyncService: _clockSyncService!,
+          sendAck: (ack) => _nodeClientService?.send(ack),
+       );
+    } else if (message.type == SyncMessageType.stop) {
+       final xfile = await _recordingManager?.handleStop();
+       if (xfile != null) {
+          await _nodeClientService?.uploadVideo(File(xfile.path));
+       }
     }
   }
 
   @override
   void dispose() {
-    _messageSub?.cancel();
-    _serverSub?.cancel();
-    _controllerChannel?.dispose();
-    _commandServer?.dispose();
-    _discoveryService?.dispose();
-    _clockSyncService?.dispose();
+    _uiTimer?.cancel();
     _cameraService?.dispose();
-    _recordingManager?.cancelScheduledStart();
-    WakelockHelper.disable();
+    _clockSyncService?.dispose();
+    _discoveryService?.dispose();
+    _nodeClientService?.disconnect();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final sessionProvider = context.watch<SessionStateProvider>();
-
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Remote Camera'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () {
-              context.read<AppRoleProvider>().setRole(AppRole.none);
-            },
-          ),
-        ],
-      ),
-      body: Stack(
-        children: [
-          // Camera Preview (or placeholder)
-          if (_cameraReady && _cameraService?.controller != null)
-            SizedBox.expand(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            // TOP: Viewport Stack
+            Expanded(
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  CameraPreview(_cameraService!.controller!),
-                  if (_isReinitializing)
-                    Container(
-                      color: Colors.black54,
-                      child: const Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            CircularProgressIndicator(color: Colors.white),
-                            SizedBox(height: 16),
-                            Text('Switching...', style: TextStyle(color: Colors.white)),
-                          ],
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            )
-          else
-            Container(
-              color: Colors.black,
-              child: const Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.camera_alt, size: 64, color: Colors.white54),
-                    SizedBox(height: 16),
-                    Text(
-                      'Initialising camera...',
-                      style: TextStyle(color: Colors.white70, fontSize: 16),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-          // Connection label
-          if (_connectionLabel != null)
-            Positioned(
-              top: 16,
-              left: 16,
-              right: 16,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  // ignore: deprecated_member_use
-                  color: Colors.black.withOpacity(0.6),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  _connectionLabel!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                ),
-              ),
-            ),
-
-          // Settings and Exposure Lock Control Cluster
-          if (_cameraReady)
-            Positioned(
-              top: 60,
-              right: 16,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  // Actual negotiated values
-                  if (_cameraService?.controller?.value.previewSize != null)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          // ignore: deprecated_member_use
-                          color: Colors.black.withOpacity(0.5),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          'Actual: ${_cameraService!.controller!.value.previewSize!.height.toInt()}p',
-                          style: const TextStyle(color: Colors.white70, fontSize: 10),
-                        ),
-                      ),
-                    ),
+                  // Base: Camera Preview
+                  if (_cameraReady && _cameraService?.controller != null)
+                    CameraPreview(_cameraService!.controller!)
+                  else
+                    const Center(child: CircularProgressIndicator(color: Colors.white)),
                   
-                  // Controls container
-                  Container(
-                    decoration: BoxDecoration(
-                      // ignore: deprecated_member_use
-                      color: Colors.black.withOpacity(0.6),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    padding: const EdgeInsets.all(8),
-                    child: IgnorePointer(
-                      ignoring: sessionProvider.status == SessionStatus.recording || _isReinitializing,
-                      child: Opacity(
-                        opacity: (sessionProvider.status == SessionStatus.recording || _isReinitializing) ? 0.5 : 1.0,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            // Resolution Dropdown
-                            DropdownButton<ResolutionPreset>(
-                              value: _selectedResolution,
-                              dropdownColor: Colors.black87,
-                              style: const TextStyle(color: Colors.white, fontSize: 12),
-                              isDense: true,
-                              underline: const SizedBox(),
-                              items: const [
-                                DropdownMenuItem(value: ResolutionPreset.low, child: Text('Low')),
-                                DropdownMenuItem(value: ResolutionPreset.medium, child: Text('Medium')),
-                                DropdownMenuItem(value: ResolutionPreset.high, child: Text('High')),
-                                DropdownMenuItem(value: ResolutionPreset.veryHigh, child: Text('Very High')),
-                              ],
-                              onChanged: (val) => _onSettingsChanged(val, null),
-                            ),
-                            const SizedBox(height: 8),
-                            // FPS Dropdown
-                            DropdownButton<int>(
-                              value: _selectedFps,
-                              dropdownColor: Colors.black87,
-                              style: const TextStyle(color: Colors.white, fontSize: 12),
-                              isDense: true,
-                              underline: const SizedBox(),
-                              items: const [
-                                DropdownMenuItem(value: 30, child: Text('30 fps')),
-                                DropdownMenuItem(value: 60, child: Text('60 fps')),
-                                DropdownMenuItem(value: 120, child: Text('120 fps')),
-                              ],
-                              onChanged: (val) => _onSettingsChanged(null, val),
-                            ),
-                            const SizedBox(height: 12),
-                            // AE Lock Toggle
-                            InkWell(
-                              borderRadius: BorderRadius.circular(4),
-                              onTap: _toggleExposureLock,
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      _isExposureLocked ? Icons.lock : Icons.lock_open,
-                                      color: _isExposureLocked ? Colors.amber : Colors.white70,
-                                      size: 16,
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      _isExposureLocked ? 'AE Locked' : 'AE Auto',
-                                      style: TextStyle(
-                                        color: _isExposureLocked ? Colors.amber : Colors.white70,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
+                  // Overlay: 3x3 Grid Lines & Reticle
+                  if (_cameraReady)
+                    const Positioned.fill(child: CameraGridOverlay()),
+
+                  // Overlay: Top Navigation Bar
+                  const Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: FloatingHeaderHUD(),
+                  ),
+
+                  // Overlay: Floating Timer Pill
+                  Positioned(
+                    bottom: 24,
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: RecordingStatusIndicator(
+                        isRecording: _isRecording,
+                        duration: _recordingDuration,
                       ),
                     ),
                   ),
                 ],
               ),
             ),
-
-          // Status Overlay
-          Positioned(
-            bottom: 24,
-            left: 24,
-            right: 100, // Make room for FAB
-            child: RemoteStatusIndicator(
-              status: sessionProvider.status,
-            ),
-          ),
-
-          // Local Shutter Button
-          Positioned(
-            bottom: 24,
-            right: 24,
-            child: FloatingActionButton(
-              onPressed: sessionProvider.status == SessionStatus.recording
-                  ? _stopLocalRecording
-                  : _startLocalRecording,
-              backgroundColor: sessionProvider.status == SessionStatus.recording ? Colors.orange : Colors.red,
-              child: Icon(
-                sessionProvider.status == SessionStatus.recording ? Icons.stop : Icons.fiber_manual_record,
-                color: Colors.white,
+            
+            // BOTTOM: Dark Control Panel
+            Container(
+              color: Colors.black,
+              padding: const EdgeInsets.only(left: 24, right: 24, top: 24, bottom: 48),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Row 1: Networking Bar
+                  NetworkingBar(
+                    isConnected: _isConnected,
+                    ipController: _ipController,
+                    connectedIp: _hostIp,
+                    onConnect: () => _connectToHost(_ipController.text),
+                  ),
+                  const SizedBox(height: 48),
+                  
+                  // Row 2: Shutter Control
+                  RemoteShutterRing(isRecording: _isRecording),
+                  const SizedBox(height: 16),
+                ],
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -23,7 +23,7 @@ class AppConstants {
   /// CameraX picks the closest supported match — actual achieved resolution
   /// varies by device and should be verified from the post-init log output
   /// or from the recorded video file properties.
-  static const ResolutionPreset targetResolutionPreset = ResolutionPreset.high;
+  static const ResolutionPreset targetResolutionPreset = ResolutionPreset.veryHigh;
 
   /// Target frames-per-second for video recording.
   ///
