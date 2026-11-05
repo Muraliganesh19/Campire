@@ -1,0 +1,59 @@
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub/
+.pub-cache/
+build/
+coverage/
+
+# Generated Flutter files
+**/Flutter/ephemeral/
+**/flutter/ephemeral/
+**/doc/api/
+
+# Dart
+*.class
+*.log
+*.pyc
+*.swp
+*.dill
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# Android
+android/.gradle/
+android/local.properties
+android/app/debug/
+android/app/profile/
+android/app/release/
+
+# Android signing
+android/key.properties
+*.jks
+*.keystore
+
+# iOS / macOS
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/ephemeral/
+macos/Pods/
+macos/.symlinks/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Generated symbols / mappings
+app.*.symbols
+app.*.map.json
