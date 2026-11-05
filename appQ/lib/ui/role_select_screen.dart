@@ -26,7 +26,8 @@ class _RoleSelectScreenState extends State<RoleSelectScreen> {
   @override
   Widget build(BuildContext context) {
     final bool showController = kIsWeb || !Platform.isAndroid;
-    final bool showRemote = !kIsWeb && !Platform.isWindows;
+    final bool showRemote =
+        !kIsWeb && !Platform.isWindows && !Platform.isLinux;
 
     return Scaffold(
       backgroundColor: Colors.black,

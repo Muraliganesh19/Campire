@@ -6,6 +6,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:file_picker/file_picker.dart';
 
+import 'package:campire/core/host_paths.dart';
 import 'package:campire/models/device_info.dart';
 import 'package:campire/models/sync_message.dart';
 import 'package:campire/network/host_server_service.dart';
@@ -24,8 +25,8 @@ class WindowsHostScreen extends StatefulWidget {
 
 class _WindowsHostScreenState extends State<WindowsHostScreen> {
   // Mock I/O Constants
-  static const String inputBasePath = r'E:\campire\Input';
-  static const String outputBasePath = r'E:\campire\Output';
+  static final String inputBasePath = HostPaths.inputDir;
+  static final String outputBasePath = HostPaths.outputDir;
   int liveSessionCounter = 1;
   int fileSessionCounter = 1;
   String? latestSessionPrefix;
@@ -45,9 +46,9 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
   bool _isRecording = false;
   bool _isAnalyzing = false;
 
-  String _ballDecision = '';
-  String _bowlerDecision = '';
-  String _wicketDecision = '';
+  String _ballDecision = 'NIL';
+  String _bowlerDecision = 'NIL';
+  String _wicketDecision = 'NIL';
 
   // MediaKit
   final List<Player> _players = [];
@@ -108,9 +109,9 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
     setState(() {
       _isRecording = false;
       _isAnalyzing = false;
-      _ballDecision = '';
-      _bowlerDecision = '';
-      _wicketDecision = '';
+      _ballDecision = 'NIL';
+      _bowlerDecision = 'NIL';
+      _wicketDecision = 'NIL';
     });
   }
 
@@ -266,14 +267,14 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
       
       if (fallbackFile != null) {
          for (int i = 1; i <= 4; i++) {
-            fallbackFile.copySync('$inputBasePath\\${prefix}_cam$i.mp4');
+            fallbackFile.copySync('$inputBasePath${Platform.pathSeparator}${prefix}_cam$i.mp4');
          }
       } else {
          print('WARNING: No .mp4 files found to upload and no fallback available.');
       }
     } else {
       for (int i = 0; i < 4 && i < mp4Files.length; i++) {
-        final outputPath = '$inputBasePath\\${prefix}_cam${i + 1}.mp4';
+        final outputPath = '$inputBasePath${Platform.pathSeparator}${prefix}_cam${i + 1}.mp4';
         mp4Files[i].copySync(outputPath);
       }
       
@@ -284,7 +285,7 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
       }
     }
 
-    final jsonPath = '$inputBasePath\\$prefix.json';
+    final jsonPath = '$inputBasePath${Platform.pathSeparator}$prefix.json';
     final jsonData = {
       "session_id": prefix,
       "bowler_stance": "NIL",
@@ -344,7 +345,7 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
 
       for (int i = 0; i < 4 && i < videos.length; i++) {
         final originalVideo = videos[i];
-        final inputVideoPath = '$inputBasePath\\${prefix}_cam${i + 1}.mp4';
+        final inputVideoPath = '$inputBasePath${Platform.pathSeparator}${prefix}_cam${i + 1}.mp4';
         originalVideo.copySync(inputVideoPath);
         
         final originalPath = originalVideo.path;
@@ -353,17 +354,17 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
           final xmlPath = '${originalPath.substring(0, lastDotIndex)}.xml';
           final xmlFile = File(xmlPath);
           if (xmlFile.existsSync()) {
-            final inputXmlPath = '$inputBasePath\\${prefix}_cam${i + 1}.xml';
+            final inputXmlPath = '$inputBasePath${Platform.pathSeparator}${prefix}_cam${i + 1}.xml';
             xmlFile.copySync(inputXmlPath);
           }
         }
       }
 
       if (jsonFile != null) {
-        final inputJsonPath = '$inputBasePath\\$prefix.json';
+        final inputJsonPath = '$inputBasePath${Platform.pathSeparator}$prefix.json';
         jsonFile.copySync(inputJsonPath);
       } else {
-        final jsonPath = '$inputBasePath\\$prefix.json';
+        final jsonPath = '$inputBasePath${Platform.pathSeparator}$prefix.json';
         final jsonData = {
           "session_id": prefix,
           "bowler_stance": "NIL",
@@ -376,6 +377,9 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
       setState(() {
         latestSessionPrefix = prefix;
         fileSessionCounter++;
+        _bowlerDecision = 'NIL';
+        _ballDecision = 'NIL';
+        _wicketDecision = 'NIL';
       });
     } else {
       print('User canceled directory selection.');
@@ -395,16 +399,16 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
         final opPrefix = latestSessionPrefix!.replaceFirst('liveip', 'liveop');
         
         for (int i = 1; i <= 4; i++) {
-          final inPath = '$inputBasePath\\${latestSessionPrefix}_cam$i.mp4';
-          final outPath = '$outputBasePath\\${opPrefix}_cam$i.mp4';
+          final inPath = '$inputBasePath${Platform.pathSeparator}${latestSessionPrefix}_cam$i.mp4';
+          final outPath = '$outputBasePath${Platform.pathSeparator}${opPrefix}_cam$i.mp4';
           final inFile = File(inPath);
           if (inFile.existsSync()) {
             inFile.copySync(outPath);
           }
         }
         
-        final inJsonPath = '$inputBasePath\\$latestSessionPrefix.json';
-        final outJsonPath = '$outputBasePath\\$opPrefix.json';
+        final inJsonPath = '$inputBasePath${Platform.pathSeparator}$latestSessionPrefix.json';
+        final outJsonPath = '$outputBasePath${Platform.pathSeparator}$opPrefix.json';
         final inJsonFile = File(inJsonPath);
         if (inJsonFile.existsSync()) {
           inJsonFile.copySync(outJsonPath);
@@ -418,7 +422,7 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
         }
         
         for (int i = 0; i < 4; i++) {
-          final outPath = '$outputBasePath\\${opPrefix}_cam${i + 1}.mp4';
+          final outPath = '$outputBasePath${Platform.pathSeparator}${opPrefix}_cam${i + 1}.mp4';
           if (File(outPath).existsSync()) {
             _players[i].open(Media(outPath));
             _players[i].play();
@@ -427,7 +431,7 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
       } else if (latestSessionPrefix!.startsWith('fileip')) {
         print('Running videomaker.py...');
         try {
-          final result = await Process.run('python', [r'C:\Users\MURALI GANESH\OneDrive\Desktop\vdor\videomaker.py']);
+          final result = await Process.run(HostPaths.pythonCommand, [HostPaths.videomakerScript]);
           print('Python script output: ${result.stdout}');
           
           if (result.exitCode != 0) {
@@ -461,11 +465,18 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
         }
         
         // External Python script saves output using the original input prefix
-        final outJsonPath = '$outputBasePath\\$latestSessionPrefix.json';
+        final outJsonPath = '$outputBasePath${Platform.pathSeparator}$latestSessionPrefix.json';
+        final inJsonPath = '$inputBasePath${Platform.pathSeparator}$latestSessionPrefix.json';
         bool allFilesExist = true;
         
-        if (File(outJsonPath).existsSync()) {
-          final content = File(outJsonPath).readAsStringSync();
+        File jsonToRead = File(outJsonPath);
+        if (!jsonToRead.existsSync() && File(inJsonPath).existsSync()) {
+          // Fallback: If python script didn't create an output JSON, use the one from Input
+          jsonToRead = File(inJsonPath);
+        }
+        
+        if (jsonToRead.existsSync()) {
+          final content = jsonToRead.readAsStringSync();
           final Map<String, dynamic> data = jsonDecode(content);
           setState(() {
             _bowlerDecision = data['bowler_stance']?.toString() ?? 'NIL';
@@ -473,11 +484,16 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
             _wicketDecision = data['wicket']?.toString() ?? 'NIL';
           });
         } else {
-          print('Warning: JSON output not found at $outJsonPath');
+          print('Warning: JSON not found at $outJsonPath or $inJsonPath');
+          setState(() {
+            _bowlerDecision = 'NIL';
+            _ballDecision = 'NIL';
+            _wicketDecision = 'NIL';
+          });
         }
         
         for (int i = 0; i < 4; i++) {
-          final outPath = '$outputBasePath\\${latestSessionPrefix}_cam${i + 1}.mp4';
+          final outPath = '$outputBasePath${Platform.pathSeparator}${latestSessionPrefix}_cam${i + 1}.mp4';
           if (!File(outPath).existsSync()) {
             allFilesExist = false;
           }
@@ -498,7 +514,7 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
         }
         
         for (int i = 0; i < 4; i++) {
-          final outPath = '$outputBasePath\\${latestSessionPrefix}_cam${i + 1}.mp4';
+          final outPath = '$outputBasePath${Platform.pathSeparator}${latestSessionPrefix}_cam${i + 1}.mp4';
           _players[i].open(Media(outPath));
           _players[i].play();
         }
@@ -1024,19 +1040,22 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
     Color cardColor,
     Color textColor,
   ) {
-    String displayOutcome = '';
-    Color outcomeColor = Colors.transparent;
+    String displayOutcome = activeValue.toUpperCase();
+    Color outcomeColor = textColor;
 
     if (activeValue.toUpperCase() == 'LEGAL' ||
         activeValue.toUpperCase() == 'VALID' ||
         activeValue.toUpperCase() == 'NOT-HIT') {
-      displayOutcome = activeValue.toUpperCase();
       outcomeColor = Colors.green;
     } else if (activeValue.toUpperCase() == 'ILLEGAL' ||
         activeValue.toUpperCase() == 'INVALID' ||
-        activeValue.toUpperCase() == 'HIT') {
-      displayOutcome = activeValue.toUpperCase();
+        activeValue.toUpperCase() == 'HIT' ||
+        activeValue.toUpperCase() == 'WIDE' ||
+        activeValue.toUpperCase() == 'NOBALL' ||
+        activeValue.toUpperCase() == 'NO-BALL') {
       outcomeColor = Colors.red;
+    } else if (activeValue.toUpperCase() == 'NIL') {
+      outcomeColor = Colors.grey;
     }
 
     return Container(

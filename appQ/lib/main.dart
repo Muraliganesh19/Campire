@@ -14,7 +14,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
   try {
-    if (!kIsWeb && Platform.isWindows) {
+    if (!kIsWeb && (Platform.isWindows || Platform.isLinux)) {
       MediaKit.ensureInitialized();
     }
   } catch (e) {
@@ -23,8 +23,11 @@ void main() async {
 
   // Request camera + microphone permissions early so the user sees the
   // prompt before choosing a role.
-  final granted = await PermissionHelper.requestAllPermissions();
-  SyncLogger.info('Permissions granted: $granted');
+  // The Linux host records nothing, and these plugins have no Linux support.
+  if (kIsWeb || !Platform.isLinux) {
+    final granted = await PermissionHelper.requestAllPermissions();
+    SyncLogger.info('Permissions granted: $granted');
+  }
 
   runApp(
     MultiProvider(

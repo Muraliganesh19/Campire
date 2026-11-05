@@ -57,3 +57,6 @@ Thumbs.db
 # Generated symbols / mappings
 app.*.symbols
 app.*.map.json
+
+#documents
+/MGdocs

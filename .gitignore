@@ -1,3 +1,6 @@
 .venv
 pose/input_vid
 pose/output
+
+MGdocs
+simulation/
