@@ -30,6 +30,9 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
   int liveSessionCounter = 1;
   int fileSessionCounter = 1;
   String? latestSessionPrefix;
+  // A simulation/ip_vid delivery. It holds frames rather than videos, so
+  // videomaker.py reads it in place instead of it being copied to Input.
+  String? _deliveryFolder;
   bool isUploadReady = false;
 
   // Services
@@ -338,6 +341,10 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
       videos.sort((a, b) => a.path.compareTo(b.path));
 
       final prefix = 'fileip$fileSessionCounter';
+      final isDelivery = ['c1', 'c2', 'c3', 'c4'].every(
+        (clip) => Directory('$selectedDirectory${Platform.pathSeparator}$clip').existsSync(),
+      );
+      final deliveryFolder = isDelivery ? selectedDirectory : null;
 
       // Housekeeping: Clear I/O directories before new upload
       _clearDirectoryFiles(inputBasePath);
@@ -376,6 +383,7 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
 
       setState(() {
         latestSessionPrefix = prefix;
+        _deliveryFolder = deliveryFolder;
         fileSessionCounter++;
         _bowlerDecision = 'NIL';
         _ballDecision = 'NIL';
@@ -431,7 +439,13 @@ class _WindowsHostScreenState extends State<WindowsHostScreen> {
       } else if (latestSessionPrefix!.startsWith('fileip')) {
         print('Running videomaker.py...');
         try {
-          final result = await Process.run(HostPaths.pythonCommand, [HostPaths.videomakerScript]);
+          for (final player in _players) {
+            await player.stop();
+          }
+          final result = await Process.run(HostPaths.pythonCommand, [
+            HostPaths.videomakerScript,
+            if (_deliveryFolder != null) ...['process', _deliveryFolder!, latestSessionPrefix!],
+          ]);
           print('Python script output: ${result.stdout}');
           
           if (result.exitCode != 0) {
